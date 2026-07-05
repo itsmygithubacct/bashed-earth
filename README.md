@@ -1,17 +1,19 @@
 # Bashed Earth
 
-Turn-based artillery combat in your terminal — a C port of
-[Tank Wars](https://tankwars.domainreviews.org) that renders real pixels
-via the **kitty graphics protocol**. No SDL, no X11, no ncurses: the whole
-game is an RGBA framebuffer zlib-compressed and streamed to the terminal
-as base64 APC escape sequences at 30 fps.
+Turn-based artillery combat in your terminal, in the grand tradition of
+Scorched Earth and Worms — rendered as real pixels via the **kitty
+graphics protocol**. No SDL, no X11, no ncurses: the whole game is a
+software-rasterized, antialiased framebuffer zlib-compressed and streamed
+to the terminal as base64 APC escape sequences at a steady 30 fps
+(double-buffered image ids + DEC 2026 synchronized updates, so no flicker;
+encoding runs on its own thread, so no stutter).
 
 Built for [kilix](https://github.com/itsmygithubacct/kilix) (and any
-kitty-protocol terminal: kitty, ghostty, wezterm...).
+kitty-protocol terminal: kitty, ghostty, wezterm...). **Linux only.**
+
+![Bashed Earth: a nuke detonates while napalm burns on the hillside](docs/screenshot.png)
 
 ## Features
-
-Full feature parity with the web original:
 
 - **Falling-sand destructible terrain** — 1px cellular automaton with
   grass/sand/ice worlds, lakes, flowing water, snow, and ice that shatters
@@ -29,13 +31,22 @@ Full feature parity with the web original:
   that buries ice worlds
 - **Hazards** — fall damage (parachutes save you), buried-alive damage,
   self-hits, and a stalemate rule so dug-in wars end
+- **Procedural sound** — every effect (shots, explosions, splashes,
+  bounces, UI ticks, the victory jingle) is synthesized at startup and
+  mixed live, streamed to whatever audio sink your system has
+  (`pacat` / `pw-play` / `aplay` / sox `play`); silently disabled if none
 
 ## Build
 
+Linux only. Needs gcc or clang, zlib, libm, and pthreads:
+
 ```sh
-make            # needs gcc/clang, zlib, libm (Linux)
+make
 ./bashed-earth
 ```
+
+Sound plays through the first available CLI sink (`pacat`, `pw-play`,
+`aplay`, or sox's `play`) — no sink, no sound, no problem.
 
 ## Controls
 
@@ -47,6 +58,7 @@ make            # needs gcc/clang, zlib, libm (Linux)
 | 1-0 | weapon hotkeys |
 | D / R | Drill / Roller |
 | Tab | cycle weapons |
+| M | toggle sound |
 | Q | quit |
 
 Menus: arrows to navigate, Left/Right to change values, Enter to confirm.
@@ -68,9 +80,16 @@ carry-over) and checks invariants — no terminal needed, so it runs in CI.
 
 | File | Role |
 |------|------|
-| `src/term.c` | raw mode, key decoding, kitty graphics frames (zlib + base64) |
+| `src/term.c` | raw mode, key decoding, kitty graphics frames (double-buffered ids, sync updates, threaded zlib + base64 encoder) |
 | `src/terrain.c` | falling-sand automaton with per-row active-span tracking |
 | `src/game.c` | tanks, projectiles, flames, explosions, AI, store, turn flow |
-| `src/render.c` | software rasteriser: scene, HUD, menus (embedded PSF font) |
+| `src/render.c` | software rasteriser: antialiased primitives, scene, HUD, menus (embedded PSF font, Scale2x/3x text) |
+| `src/sound.c` | procedural SFX synth + mixer thread piped to a CLI audio sink |
 | `src/config.c` | weapon/AI/color data tables |
 | `src/main.c` | 30 fps loop (60 Hz logic), selftest, render-test |
+
+## License
+
+MIT — see [LICENSE](LICENSE). The embedded terminal font comes from
+Debian console-setup's public-domain console fonts (details in
+`src/font8x16.h`).
