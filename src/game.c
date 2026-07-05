@@ -1,6 +1,4 @@
-/* Game logic: tanks, projectiles, flames, explosions, AI, store, turn flow.
- * Faithful port of the JS Physics/AI/Game modules. All tuning constants
- * match the original so the game feels identical. */
+/* Game logic: tanks, projectiles, flames, explosions, AI, store, turn flow. */
 #include "bashed_earth.h"
 #include <stdlib.h>
 #include <string.h>
@@ -114,7 +112,7 @@ static void clear_effects(void)
     G.hasLastShot = false;
 }
 
-/* ---------- terrain interaction (JS Terrain.explode) ---------- */
+/* ---------- terrain interaction ---------- */
 static void check_tanks_falling(void)
 {
     for (int i = 0; i < G.numPlayers; i++) {
@@ -159,6 +157,13 @@ static const uint32_t SMOKE_COLORS[3] = { 0x888888, 0x666666, 0x444444 };
 void create_explosion(float x, float y, float radius, float damage, int weaponType)
 {
     const Weapon *weapon = &WEAPONS[weaponType];
+
+    if (weaponType == W_DIRT)
+        sound_play(SFX_DIRT, 0.8f, 1);
+    else
+        sound_play(radius >= 50 ? SFX_EXPL_BIG : SFX_EXPL_SMALL,
+                   clampf(0.4f + radius / 90.0f, 0, 1), 1);
+
     explode_terrain(x, y, radius, weaponType == W_DIRT);
 
     int fireCount = (int)(radius * 0.8f);
@@ -235,6 +240,7 @@ void create_explosion(float x, float y, float radius, float damage, int weaponTy
             tank->shield--;
             G.ammo[tank->id][W_SHIELD] = tank->shield;
             add_damage_text(tank->x, tank->y - 40, "[BLOCKED]", 0x4488ff);
+            sound_play(SFX_SHIELD, 0.8f, 1);
             continue;
         }
 
@@ -259,6 +265,7 @@ void create_explosion(float x, float y, float radius, float damage, int weaponTy
             if (tank->isAI)
                 add_damage_text(tank->x, tank->y - 50,
                                 AI_DEATH_MESSAGES[rand() % 10], 0xffff00);
+            sound_play(SFX_DEATH, 1, 1);
             create_explosion(tank->x, tank->y, 45, 0, W_NORMAL);
         }
     }
@@ -314,10 +321,12 @@ static void check_buried_tanks(void)
                 char msg[32];
                 snprintf(msg, sizeof msg, "BURIED! -%d", buriedDmg);
                 add_damage_text(tank->x, tank->y - 50, msg, 0x8b4513);
+                sound_play(SFX_DIRT, 0.5f, 1.2f);
                 tank->maxPower = fmaxf(10, tank->maxPower - buriedDmg / 4.0f);
                 tank->power = fminf(tank->power, tank->maxPower);
                 if (tank->hp <= 0 && !tank->dead) {
                     tank->dead = true;
+                    sound_play(SFX_DEATH, 1, 1);
                     create_explosion(tank->x, tank->y, 40, 0, W_NORMAL);
                 }
             }
@@ -364,6 +373,7 @@ static void update_tanks(void)
                     tank->shield--;
                     G.ammo[tank->id][W_SHIELD] = tank->shield;
                     add_damage_text(tank->x, tank->y - 40, "[BLOCKED]", 0x4488ff);
+                    sound_play(SFX_SHIELD, 0.7f, 1);
                     tank->fallShielded = true;
                 }
                 if (fallDist > 20 && !tank->parachuteActive && !tank->fallShielded) {
@@ -378,6 +388,7 @@ static void update_tanks(void)
                     if (dmg > 5) create_explosion(tank->x, tank->y, 20, 0, W_NORMAL);
                     if (tank->hp <= 0 && !tank->dead) {
                         tank->dead = true;
+                        sound_play(SFX_DEATH, 1, 1);
                         create_explosion(tank->x, tank->y, 45, 0, W_NORMAL);
                     }
                 }
@@ -453,6 +464,8 @@ void game_fire(void)
     G.lastShotAngle = tank->angle; G.lastShotPower = firePower;
     G.lastShotColor = weapon->color;
 
+    sound_play(SFX_FIRE, 0.85f, 0.85f + 0.3f * firePower / 100);
+
     if (G.currentWeapon == W_TRIPLE) {
         for (int i = -1; i <= 1; i++) {
             Projectile *p = push_projectile();
@@ -519,6 +532,7 @@ static void next_turn(void)
         if (lastAlive >= 0) G.matchWins[lastAlive]++;
         G.gameState = GS_GAMEOVER;
         G.pendingAIStart = G.pendingAIFire = G.pendingNextTurn = 0;
+        sound_play(SFX_WIN, 0.9f, 1);
         return;
     }
 
@@ -543,6 +557,7 @@ static void next_turn(void)
         }
         G.gameState = GS_GAMEOVER;
         G.pendingAIStart = G.pendingAIFire = G.pendingNextTurn = 0;
+        sound_play(SFX_WIN, 0.9f, 1);
         return;
     }
 
@@ -575,6 +590,7 @@ static void next_turn(void)
             if (terrain_place_raft(tank->x, TANK_WIDTH * 1.5f)) {
                 G.ammo[tank->id][W_RAFT]--;
                 add_damage_text(tank->x, tank->y - 60, "RAFT DEPLOYED", 0x88ddff);
+                sound_play(SFX_SPLASH, 0.6f, 0.8f);
                 tank->falling = true;
             }
         }
@@ -602,6 +618,7 @@ static void update_projectiles(void)
             if (terrain_is_liquid(p->x, p->y)) {
                 if (!p->inLiquid) {
                     p->inLiquid = true;
+                    sound_play(SFX_SPLASH, 0.65f, 1);
                     for (int s = 0; s < 8; s++)
                         push_particle(p->x, p->y, (frandf() - 0.5f) * 3,
                                       -frandf() * 2 - 1, 0.7f, 0.05f,
@@ -629,6 +646,7 @@ static void update_projectiles(void)
                 p->vx *= 0.8f;
                 p->y -= 5;
                 p->bounces++;
+                sound_play(SFX_BOUNCE, 0.7f, 1 + p->bounces * 0.08f);
                 for (int j = 0; j < 5; j++)
                     push_particle(p->x, p->y, (frandf() - 0.5f) * 4,
                                   -frandf() * 3, 0.5f, 0.05f, 0xff88ff, 2, P_SPARK);
@@ -676,6 +694,7 @@ static void update_projectiles(void)
         /* MIRV split at apex */
         if (p->weapon == W_MIRV && !p->mirvSplit && p->vy > 0) {
             p->mirvSplit = true;
+            sound_play(SFX_MIRV, 0.7f, 1);
             for (int j = -1; j <= 1; j++) {
                 Projectile *np = push_projectile();
                 if (!np) break;
@@ -693,6 +712,7 @@ static void update_projectiles(void)
         if (p->weapon == W_DRILL && terrain_is_ground(p->x, p->y)) {
             terrain_remove_radius(p->x, p->y, 8);
             p->drillDepth++;
+            if (p->drillDepth == 1) sound_play(SFX_DRILL, 0.7f, 1);
             if (p->drillDepth > weapon->drillDepth) {
                 create_explosion(p->x, p->y, p->radius, weapon->damage, p->weapon);
                 p->active = false;
@@ -703,6 +723,7 @@ static void update_projectiles(void)
         if (p->weapon == W_DIGGER && terrain_is_ground(p->x, p->y)) {
             terrain_remove_radius(p->x, p->y, 14);
             p->digDepth++;
+            if (p->digDepth == 1) sound_play(SFX_DRILL, 0.7f, 0.72f);
             if (p->digDepth > 15) {
                 create_explosion(p->x, p->y, p->radius, weapon->damage, p->weapon);
                 p->active = false;
@@ -714,6 +735,7 @@ static void update_projectiles(void)
         if (!p->rolling && G.wallBounce && (p->x < 0 || p->x >= G.W)) {
             p->vx = -p->vx * 0.8f;
             p->x = p->x < 0 ? 0 : G.W - 1;
+            sound_play(SFX_BOUNCE, 0.45f, 0.8f);
             continue;
         }
 
@@ -811,6 +833,7 @@ static void update_flames(void)
                 if (tank->isAI)
                     add_damage_text(tank->x, tank->y - 50,
                                     AI_DEATH_MESSAGES[rand() % 10], 0xffff00);
+                sound_play(SFX_DEATH, 1, 1);
                 create_explosion(tank->x, tank->y, 45, 0, W_NORMAL);
             }
         }
@@ -1160,8 +1183,7 @@ void game_start_from_menu(void)
     G.lastWinnerId = -1;
 
     /* terrain type must be rolled before the store so AI raft-buying can
-     * see whether there's water — matches the JS flow (rollTerrain at
-     * startGame, generate at launch) */
+     * see whether there's water; generation itself waits until launch */
     if (G.terrainSetting == 0) G.terrainType = rand() % 3;
     else G.terrainType = G.terrainSetting - 1;
 
@@ -1211,6 +1233,7 @@ static void handle_key_playing(int key)
 {
     Tank *tank = &G.tanks[G.currentPlayer];
     if (tank->isAI) return;
+    int weaponBefore = G.currentWeapon;
 
     switch (key) {
     case KEY_LEFT:
@@ -1250,22 +1273,36 @@ static void handle_key_playing(int key)
         }
         break;
     }
+    if (G.currentWeapon != weaponBefore)
+        sound_play(SFX_MENU_MOVE, 0.4f, 1.4f);
 }
 
 /* start menu rows: 0..2 opponents, 3 terrain, 4 wind, 5 precip, 6 damage,
- * 7 wall bounce, 8 START */
+ * 7 wall bounce, 8 sound, 9 START */
+static void try_start(void)
+{
+    game_start_from_menu();
+    sound_play(G.gameState != GS_START ? SFX_MENU_SELECT : SFX_DENY, 0.7f, 1);
+}
+
 static void handle_key_start(int key)
 {
     int dir = key == KEY_LEFT ? -1 : key == KEY_RIGHT ? 1 : 0;
     switch (key) {
-    case KEY_UP:   G.startCursor = (G.startCursor + START_ROWS - 1) % START_ROWS; return;
-    case KEY_DOWN: G.startCursor = (G.startCursor + 1) % START_ROWS; return;
+    case KEY_UP:
+        G.startCursor = (G.startCursor + START_ROWS - 1) % START_ROWS;
+        sound_play(SFX_MENU_MOVE, 0.5f, 1);
+        return;
+    case KEY_DOWN:
+        G.startCursor = (G.startCursor + 1) % START_ROWS;
+        sound_play(SFX_MENU_MOVE, 0.5f, 1);
+        return;
     case KEY_ENTER:
     case ' ':
-        if (G.startCursor == 8 || key == KEY_ENTER) { game_start_from_menu(); return; }
+        if (G.startCursor == START_ROWS - 1 || key == KEY_ENTER) { try_start(); return; }
         dir = 1;
         break;
-    case 's': case 'S': game_start_from_menu(); return;
+    case 's': case 'S': try_start(); return;
     default: break;
     }
     if (!dir) return;
@@ -1290,27 +1327,47 @@ static void handle_key_start(int key)
         G.damageMultiplier = steps[(cur + dir + 4) % 4];
     } else if (row == 7) {
         G.wallBounce = !G.wallBounce;
+    } else if (row == 8) {
+        G.soundOn = !G.soundOn;
+        sound_set_enabled(G.soundOn);
+    } else {
+        return;                       /* START row: left/right is a no-op */
     }
+    sound_play(SFX_MENU_MOVE, 0.5f, 1.3f);
 }
 
 static void handle_key_store(int key)
 {
     int w = STORE_ORDER[G.storeCursor];
     switch (key) {
-    case KEY_UP:   G.storeCursor = (G.storeCursor + STORE_ITEMS - 1) % STORE_ITEMS; break;
-    case KEY_DOWN: G.storeCursor = (G.storeCursor + 1) % STORE_ITEMS; break;
+    case KEY_UP:
+        G.storeCursor = (G.storeCursor + STORE_ITEMS - 1) % STORE_ITEMS;
+        sound_play(SFX_MENU_MOVE, 0.5f, 1);
+        break;
+    case KEY_DOWN:
+        G.storeCursor = (G.storeCursor + 1) % STORE_ITEMS;
+        sound_play(SFX_MENU_MOVE, 0.5f, 1);
+        break;
     case KEY_RIGHT: case '+': case '=':
-        if (game_money_left(G.storePlayer) >= WEAPONS[w].cost)
+        if (game_money_left(G.storePlayer) >= WEAPONS[w].cost) {
             G.purchases[G.storePlayer][w]++;
+            sound_play(SFX_BUY, 0.6f, 1);
+        } else {
+            sound_play(SFX_DENY, 0.6f, 1);
+        }
         break;
     case KEY_LEFT: case '-': case KEY_BACKSPACE:
-        if (G.purchases[G.storePlayer][w] > G.carry[G.storePlayer][w])
+        if (G.purchases[G.storePlayer][w] > G.carry[G.storePlayer][w]) {
             G.purchases[G.storePlayer][w]--;
+            sound_play(SFX_MENU_MOVE, 0.5f, 0.8f);
+        }
         break;
     case 'z': case 'Z':
         game_store_reset();
+        sound_play(SFX_MENU_MOVE, 0.5f, 0.7f);
         break;
     case KEY_ENTER: case 's': case 'S':
+        sound_play(SFX_MENU_SELECT, 0.7f, 1);
         game_store_confirm();
         break;
     default: break;
@@ -1319,13 +1376,22 @@ static void handle_key_store(int key)
 
 static void handle_key_gameover(int key)
 {
-    if (key == KEY_ENTER || key == ' ' || key == 'n' || key == 'N')
+    if (key == KEY_ENTER || key == ' ' || key == 'n' || key == 'N') {
+        sound_play(SFX_MENU_SELECT, 0.7f, 1);
         game_next_round();
+    }
 }
 
 void game_handle_key(int key)
 {
     if (key == 'q' || key == 'Q') { G.quit = true; return; }
+    if (key == 'm' || key == 'M') {       /* mute toggle, any screen */
+        G.soundOn = !G.soundOn;
+        sound_set_enabled(G.soundOn);
+        sound_play(SFX_MENU_SELECT, 0.7f, 1);
+        options_save();
+        return;
+    }
     switch (G.gameState) {
     case GS_START:    handle_key_start(key); break;
     case GS_STORE:    handle_key_store(key); break;
@@ -1383,15 +1449,27 @@ void game_tick(void)
     G.screenFlash = G.screenFlash > 0.01f ? G.screenFlash * 0.9f : 0;
 }
 
-/* ---------- options persistence (~/.config/bashed-earth.conf) ---------- */
-#include <pwd.h>
-#include <unistd.h>
+/* ---------- options persistence ---------- */
+/* $XDG_CONFIG_HOME/bashed-earth.conf, defaulting to ~/.config */
+#include <sys/stat.h>
+
+static void conf_dir(char *buf, size_t n)
+{
+    const char *xdg = getenv("XDG_CONFIG_HOME");
+    if (xdg && *xdg) {
+        snprintf(buf, n, "%s", xdg);
+        return;
+    }
+    const char *home = getenv("HOME");
+    if (!home) home = ".";
+    snprintf(buf, n, "%s/.config", home);
+}
 
 static void conf_path(char *buf, size_t n)
 {
-    const char *home = getenv("HOME");
-    if (!home) home = ".";
-    snprintf(buf, n, "%s/.config/bashed-earth.conf", home);
+    char dir[448];
+    conf_dir(dir, sizeof dir);
+    snprintf(buf, n, "%s/bashed-earth.conf", dir);
 }
 
 void options_load(void)
@@ -1408,6 +1486,7 @@ void options_load(void)
         else if (!strcmp(key, "precip")) G.precipSetting = (int)val % 5;
         else if (!strcmp(key, "damage")) G.damageMultiplier = clampf(val, 0.5f, 2.0f);
         else if (!strcmp(key, "wallBounce")) G.wallBounce = val != 0;
+        else if (!strcmp(key, "sound")) G.soundOn = val != 0;
         else if (!strcmp(key, "p2")) { G.pEnabled[1] = val >= 0; G.pStrategy[1] = val >= 1 ? ((int)val - 1) % STRAT_COUNT : -1; }
         else if (!strcmp(key, "p3")) { G.pEnabled[2] = val >= 0; G.pStrategy[2] = val >= 1 ? ((int)val - 1) % STRAT_COUNT : -1; }
         else if (!strcmp(key, "p4")) { G.pEnabled[3] = val >= 0; G.pStrategy[3] = val >= 1 ? ((int)val - 1) % STRAT_COUNT : -1; }
@@ -1417,7 +1496,9 @@ void options_load(void)
 
 void options_save(void)
 {
-    char path[512];
+    char dir[448], path[512];
+    conf_dir(dir, sizeof dir);
+    mkdir(dir, 0755);            /* ensure the config dir exists */
     conf_path(path, sizeof path);
     FILE *f = fopen(path, "w");
     if (!f) return;
@@ -1426,6 +1507,7 @@ void options_save(void)
     fprintf(f, "precip=%d\n", G.precipSetting);
     fprintf(f, "damage=%g\n", G.damageMultiplier);
     fprintf(f, "wallBounce=%d\n", G.wallBounce ? 1 : 0);
+    fprintf(f, "sound=%d\n", G.soundOn ? 1 : 0);
     for (int p = 1; p < MAX_PLAYERS; p++)
         fprintf(f, "p%d=%d\n", p + 1,
                 !G.pEnabled[p] ? -1 : G.pStrategy[p] < 0 ? 0 : G.pStrategy[p] + 1);

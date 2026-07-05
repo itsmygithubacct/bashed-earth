@@ -1,5 +1,5 @@
 /* Software renderer: draws the scene + UI into an RGBA framebuffer that
- * term.c ships to the terminal. Visuals mirror the web canvas version. */
+ * term.c ships to the terminal. */
 #include "bashed_earth.h"
 #include "font8x16.h"
 #include <stdlib.h>
@@ -41,8 +41,11 @@ void render_init(int w, int h)
         }
     }
     for (int i = 0; i < 100; i++) {
-        int x = (i * 137) % W;
-        int y = (i * 73) % (int)(H * 0.6f);
+        /* hash-scattered so the stars don't line up on a modulo lattice */
+        uint32_t h = (uint32_t)i * 2654435761u;
+        h ^= h >> 15; h *= 0x2c1b3c6du; h ^= h >> 12;
+        int x = (int)(h % (uint32_t)W);
+        int y = (int)((h >> 12) % (uint32_t)(H * 0.6f));
         int size = 1 + (i % 3);
         float a = 0.15f + (i % 10) * 0.08f;
         uint8_t v = (uint8_t)(255 * a);
@@ -64,81 +67,202 @@ void render_shutdown(void)
 static inline void px_blend(int x, int y, uint32_t rgb, float a)
 {
     x += OX; y += OY;
-    if (x < 0 || x >= W || y < 0 || y >= H || a <= 0) return;
+    if (x < 0 || x >= W || y < 0 || y >= H) return;
+    int ai = (int)(a * 256.0f + 0.5f);
+    if (ai <= 0) return;
+    if (ai > 256) ai = 256;
     uint8_t *p = fb + ((size_t)y * W + x) * 4;
-    float ia = 1 - a;
-    p[0] = (uint8_t)(((rgb >> 16) & 255) * a + p[0] * ia);
-    p[1] = (uint8_t)(((rgb >> 8) & 255) * a + p[1] * ia);
-    p[2] = (uint8_t)((rgb & 255) * a + p[2] * ia);
+    int r = (rgb >> 16) & 255, g = (rgb >> 8) & 255, b = rgb & 255;
+    p[0] = (uint8_t)(p[0] + (((r - p[0]) * ai) >> 8));
+    p[1] = (uint8_t)(p[1] + (((g - p[1]) * ai) >> 8));
+    p[2] = (uint8_t)(p[2] + (((b - p[2]) * ai) >> 8));
 }
 
+/* rect with antialiased fractional edges: per-axis pixel coverage */
 static void fill_rect(float fx, float fy, float fw, float fh, uint32_t rgb, float a)
 {
-    int x0 = (int)fx, y0 = (int)fy, x1 = (int)(fx + fw), y1 = (int)(fy + fh);
-    for (int y = y0; y < y1; y++)
-        for (int x = x0; x < x1; x++)
-            px_blend(x, y, rgb, a);
+    if (fw <= 0 || fh <= 0) return;
+    int x0 = (int)floorf(fx), x1 = (int)ceilf(fx + fw);
+    int y0 = (int)floorf(fy), y1 = (int)ceilf(fy + fh);
+    for (int y = y0; y < y1; y++) {
+        float cy = fminf((float)(y + 1), fy + fh) - fmaxf((float)y, fy);
+        if (cy <= 0) continue;
+        if (cy > 1) cy = 1;
+        for (int x = x0; x < x1; x++) {
+            float cx = fminf((float)(x + 1), fx + fw) - fmaxf((float)x, fx);
+            if (cx <= 0) continue;
+            if (cx > 1) cx = 1;
+            px_blend(x, y, rgb, a * cx * cy);
+        }
+    }
 }
 
+/* antialiased disc: coverage ramps over the 1px rim. Row spans keep it
+ * cheap — the interior blends with no per-pixel sqrt, only rim pixels
+ * compute distance. */
 static void fill_circle(float cx, float cy, float r, uint32_t rgb, float a)
 {
-    int x0 = (int)(cx - r), x1 = (int)(cx + r) + 1;
-    int y0 = (int)(cy - r), y1 = (int)(cy + r) + 1;
-    float r2 = r * r;
-    for (int y = y0; y < y1; y++)
-        for (int x = x0; x < x1; x++) {
-            float dx = x + 0.5f - cx, dy = y + 0.5f - cy;
-            if (dx * dx + dy * dy <= r2) px_blend(x, y, rgb, a);
+    if (r <= 0) return;
+    float rOut = r + 0.5f, rIn = r - 0.5f;
+    float rOut2 = rOut * rOut, rIn2 = rIn > 0 ? rIn * rIn : 0;
+    int y0 = (int)floorf(cy - rOut), y1 = (int)ceilf(cy + rOut);
+    for (int y = y0; y <= y1; y++) {
+        float dy = y + 0.5f - cy;
+        float w2 = rOut2 - dy * dy;
+        if (w2 <= 0) continue;
+        float half = sqrtf(w2);
+        int x0 = (int)floorf(cx - half), x1 = (int)ceilf(cx + half);
+        for (int x = x0; x <= x1; x++) {
+            float dx = x + 0.5f - cx;
+            float d2 = dx * dx + dy * dy;
+            if (d2 >= rOut2) continue;
+            if (d2 <= rIn2) { px_blend(x, y, rgb, a); continue; }
+            float cov = rOut - sqrtf(d2);
+            px_blend(x, y, rgb, a * (cov > 1 ? 1 : cov));
         }
+    }
 }
 
-/* soft radial glow: alpha fades linearly to 0 at r */
+/* soft radial glow: alpha fades linearly to 0 at r (row spans skip the
+ * empty bounding-box corners) */
 static void glow_circle(float cx, float cy, float r, uint32_t rgb, float a)
 {
-    int x0 = (int)(cx - r), x1 = (int)(cx + r) + 1;
-    int y0 = (int)(cy - r), y1 = (int)(cy + r) + 1;
+    if (r <= 0) return;
+    float r2 = r * r;
+    int y0 = (int)floorf(cy - r), y1 = (int)ceilf(cy + r);
+    for (int y = y0; y <= y1; y++) {
+        float dy = y + 0.5f - cy;
+        float w2 = r2 - dy * dy;
+        if (w2 <= 0) continue;
+        float half = sqrtf(w2);
+        int x0 = (int)floorf(cx - half), x1 = (int)ceilf(cx + half);
+        for (int x = x0; x <= x1; x++) {
+            float dx = x + 0.5f - cx;
+            float d2 = dx * dx + dy * dy;
+            if (d2 >= r2) continue;
+            px_blend(x, y, rgb, a * (1 - sqrtf(d2) / r));
+        }
+    }
+}
+
+/* antialiased annulus; dashes measured in pixels of arc length */
+static void ring(float cx, float cy, float r, float width, uint32_t rgb,
+                 float a, int dashOn, int dashOff)
+{
+    if (r <= 0) return;
+    float hw = width / 2;
+    if (hw < 0.35f) hw = 0.35f;
+    int x0 = (int)floorf(cx - r - hw) - 1, x1 = (int)ceilf(cx + r + hw) + 1;
+    int y0 = (int)floorf(cy - r - hw) - 1, y1 = (int)ceilf(cy + r + hw) + 1;
+    int period = dashOn + dashOff;
     for (int y = y0; y < y1; y++)
         for (int x = x0; x < x1; x++) {
             float dx = x + 0.5f - cx, dy = y + 0.5f - cy;
             float d = sqrtf(dx * dx + dy * dy);
-            if (d < r) px_blend(x, y, rgb, a * (1 - d / r));
+            float cov = hw + 0.5f - fabsf(d - r);
+            if (cov <= 0) continue;
+            if (cov > 1) cov = 1;
+            if (period > 0) {
+                float arc = (atan2f(dy, dx) + 3.14159265f) * r;
+                if (fmodf(arc, (float)period) >= dashOn) continue;
+            }
+            px_blend(x, y, rgb, a * cov);
         }
 }
 
-static void ring(float cx, float cy, float r, float width, uint32_t rgb,
-                 float a, int dashOn, int dashOff)
-{
-    int steps = (int)(r * 6.283f);
-    if (steps < 12) steps = 12;
-    int period = dashOn + dashOff;
-    for (int i = 0; i < steps; i++) {
-        if (period > 0 && (i % period) >= dashOn) continue;
-        float t = 6.283f * i / steps;
-        float x = cx + cosf(t) * r, y = cy + sinf(t) * r;
-        for (float wx = 0; wx < width; wx += 1)
-            px_blend((int)(x), (int)(y + wx - width / 2), rgb, a);
-    }
-}
-
+/* antialiased capsule (distance to segment); dashes in pixels along it */
 static void draw_line(float x0, float y0, float x1, float y1, float width,
                       uint32_t rgb, float a, int dashOn, int dashOff)
 {
     float dx = x1 - x0, dy = y1 - y0;
-    float len = sqrtf(dx * dx + dy * dy);
-    if (len < 0.5f) return;
-    int steps = (int)len + 1;
-    int period = dashOn + dashOff;
+    float len2 = dx * dx + dy * dy;
     float hw = width / 2;
-    for (int i = 0; i <= steps; i++) {
-        if (period > 0 && (i % period) >= dashOn) continue;
-        float t = (float)i / steps;
-        float x = x0 + dx * t, y = y0 + dy * t;
-        if (width <= 1.5f) px_blend((int)x, (int)y, rgb, a);
-        else fill_circle(x, y, hw, rgb, a);
-    }
+    if (hw < 0.5f) hw = 0.5f;
+    if (len2 < 0.25f) { fill_circle(x0, y0, hw, rgb, a); return; }
+    float len = sqrtf(len2);
+    int bx0 = (int)floorf(fminf(x0, x1) - hw) - 1;
+    int bx1 = (int)ceilf(fmaxf(x0, x1) + hw) + 1;
+    int by0 = (int)floorf(fminf(y0, y1) - hw) - 1;
+    int by1 = (int)ceilf(fmaxf(y0, y1) + hw) + 1;
+    int period = dashOn + dashOff;
+    for (int y = by0; y < by1; y++)
+        for (int x = bx0; x < bx1; x++) {
+            float px = x + 0.5f - x0, py = y + 0.5f - y0;
+            float t = (px * dx + py * dy) / len2;
+            float tc = clampf(t, 0, 1);
+            float qx = px - tc * dx, qy = py - tc * dy;
+            float cov = hw + 0.5f - sqrtf(qx * qx + qy * qy);
+            if (cov <= 0) continue;
+            if (cov > 1) cov = 1;
+            if (period > 0 && fmodf(tc * len, (float)period) >= dashOn)
+                continue;
+            px_blend(x, y, rgb, a * cov);
+        }
 }
 
 static int text_width(const char *s, int scale) { return (int)strlen(s) * FONT_W * scale; }
+
+static inline int glyph_bit(const unsigned char *glyph, int gx, int gy)
+{
+    if (gx < 0 || gx >= FONT_W || gy < 0 || gy >= FONT_H) return 0;
+    return (glyph[gy] >> (7 - gx)) & 1;
+}
+
+/* Scaled glyphs are smoothed with EPX/Scale2x (and the Scale3x variant)
+ * so magnified menu text gets rounded corners instead of blocky stairs;
+ * scale 1 stays the crisp raw bitmap. */
+static void draw_glyph(int x, int y, const unsigned char *g, uint32_t rgb,
+                       float a, int scale)
+{
+    for (int gy = 0; gy < FONT_H; gy++)
+        for (int gx = 0; gx < FONT_W; gx++) {
+            int E = glyph_bit(g, gx, gy);
+            if (scale != 2 && scale != 3) {    /* plain block scaling */
+                if (E)
+                    for (int sy = 0; sy < scale; sy++)
+                        for (int sx = 0; sx < scale; sx++)
+                            px_blend(x + gx * scale + sx, y + gy * scale + sy,
+                                     rgb, a);
+                continue;
+            }
+            int B = glyph_bit(g, gx, gy - 1);      /* up */
+            int D = glyph_bit(g, gx - 1, gy);      /* left */
+            int F = glyph_bit(g, gx + 1, gy);      /* right */
+            int H = glyph_bit(g, gx, gy + 1);      /* down */
+            int o[9];
+            if (scale == 2) {
+                o[0] = o[1] = o[2] = o[3] = E;
+                if (D == B && D != H && B != F) o[0] = B;
+                if (B == F && B != D && F != H) o[1] = B;
+                if (H == D && H != F && D != B) o[2] = D;
+                if (F == H && F != B && H != D) o[3] = F;
+            } else {                               /* Scale3x */
+                int A = glyph_bit(g, gx - 1, gy - 1);
+                int C = glyph_bit(g, gx + 1, gy - 1);
+                int Gg = glyph_bit(g, gx - 1, gy + 1);
+                int I = glyph_bit(g, gx + 1, gy + 1);
+                for (int k = 0; k < 9; k++) o[k] = E;
+                if (D == B && D != H && B != F) o[0] = D;
+                if ((D == B && D != H && B != F && E != C) ||
+                    (B == F && B != D && F != H && E != A)) o[1] = B;
+                if (B == F && B != D && F != H) o[2] = F;
+                if ((H == D && H != F && D != B && E != A) ||
+                    (D == B && D != H && B != F && E != Gg)) o[3] = D;
+                if ((B == F && B != D && F != H && E != I) ||
+                    (F == H && F != B && H != D && E != C)) o[5] = F;
+                if (H == D && H != F && D != B) o[6] = D;
+                if ((F == H && F != B && H != D && E != Gg) ||
+                    (H == D && H != F && D != B && E != I)) o[7] = H;
+                if (F == H && F != B && H != D) o[8] = F;
+            }
+            int n = scale == 2 ? 2 : 3;
+            for (int sy = 0; sy < n; sy++)
+                for (int sx = 0; sx < n; sx++)
+                    if (o[sy * n + sx])
+                        px_blend(x + gx * scale + sx, y + gy * scale + sy,
+                                 rgb, a);
+        }
+}
 
 static void draw_text(float fx, float fy, const char *s, uint32_t rgb,
                       float a, int scale)
@@ -147,16 +271,7 @@ static void draw_text(float fx, float fy, const char *s, uint32_t rgb,
     for (; *s; s++) {
         unsigned char c = (unsigned char)*s;
         if (c < 32 || c > 126) c = '?';
-        const unsigned char *glyph = font8x16[c - 32];
-        for (int gy = 0; gy < FONT_H; gy++) {
-            unsigned char bits = glyph[gy];
-            for (int gx = 0; gx < FONT_W; gx++) {
-                if (!(bits & (0x80 >> gx))) continue;
-                for (int sy = 0; sy < scale; sy++)
-                    for (int sx = 0; sx < scale; sx++)
-                        px_blend(x + gx * scale + sx, y + gy * scale + sy, rgb, a);
-            }
-        }
+        draw_glyph(x, y, font8x16[c - 32], rgb, a, scale);
         x += FONT_W * scale;
     }
 }
@@ -346,8 +461,22 @@ static void draw_scene(void)
 
     OX = OY = 0;
 
-    if (G.screenFlash > 0)
-        fill_rect(0, 0, W, H, 0xffc896, G.screenFlash * 0.3f);
+    /* full-screen flash: fixed-point fast path — a per-pixel px_blend
+     * over the whole 1600x1000 framebuffer would eat the frame budget */
+    if (G.screenFlash > 0) {
+        int ai = (int)(G.screenFlash * 0.3f * 256);
+        if (ai > 256) ai = 256;
+        if (ai > 0) {
+            const int fr = 0xff, fg = 0xc8, fb_ = 0x96;
+            uint8_t *p = fb;
+            size_t n = (size_t)W * H;
+            for (size_t i = 0; i < n; i++, p += 4) {
+                p[0] = (uint8_t)(p[0] + (((fr - p[0]) * ai) >> 8));
+                p[1] = (uint8_t)(p[1] + (((fg - p[1]) * ai) >> 8));
+                p[2] = (uint8_t)(p[2] + (((fb_ - p[2]) * ai) >> 8));
+            }
+        }
+    }
 }
 
 /* ---------- HUD & overlays ---------- */
@@ -388,7 +517,7 @@ static void draw_hud(void)
         draw_text(16, by + 28, buf, 0xfafafa, 1, 1);
         draw_text(W - 540, by + 8,
                   "ARROWS aim/power  SPACE fire  TAB/1-0/D/R weapon", 0x71717a, 1, 1);
-        draw_text(W - 540, by + 28, "Q quit", 0x71717a, 1, 1);
+        draw_text(W - 540, by + 28, "M sound  Q quit", 0x71717a, 1, 1);
     } else {
         snprintf(buf, sizeof buf, "%s is taking their turn...", tank->name);
         draw_text(16, by + 18, buf, 0xa1a1aa, 1, 1);
@@ -407,9 +536,9 @@ static void draw_start_menu(void)
 {
     char buf[128];
     int px, py;
-    panel(620, 480, &px, &py);
+    panel(620, 516, &px, &py);
     draw_text_center(W / 2.0f, py + 18, "BASHED EARTH", 0x3b82f6, 1, 3);
-    draw_text_center(W / 2.0f, py + 68, "terminal artillery -- a Tank Wars port", 0x71717a, 1, 1);
+    draw_text_center(W / 2.0f, py + 68, "turn-based artillery in your terminal", 0x71717a, 1, 1);
 
     const char *rows[START_ROWS];
     char rowbuf[START_ROWS][96];
@@ -424,17 +553,19 @@ static void draw_start_menu(void)
     snprintf(rowbuf[5], 96, "Precipitation     < %s >", SETTING_NAMES[G.precipSetting]);
     snprintf(rowbuf[6], 96, "Damage            < %.1fx >", G.damageMultiplier);
     snprintf(rowbuf[7], 96, "Wall bounce       < %s >", G.wallBounce ? "On" : "Off");
-    snprintf(rowbuf[8], 96, "        START  ");
+    snprintf(rowbuf[8], 96, "Sound             < %s >", G.soundOn ? "On" : "Off");
+    snprintf(rowbuf[9], 96, "        START  ");
     for (int i = 0; i < START_ROWS; i++) rows[i] = rowbuf[i];
 
+    int last = START_ROWS - 1;
     for (int i = 0; i < START_ROWS; i++) {
         int ry = py + 110 + i * 34;
         bool sel = G.startCursor == i;
         if (sel) fill_rect(px + 40, ry - 4, 540, 26, 0x27272a, 1);
-        draw_text(px + 60, ry, rows[i], i == 8 ? 0x22c55e : sel ? 0xfafafa : 0xa1a1aa,
-                  1, i == 8 ? 2 : 1);
+        draw_text(px + 60, ry, rows[i], i == last ? 0x22c55e : sel ? 0xfafafa : 0xa1a1aa,
+                  1, i == last ? 2 : 1);
     }
-    draw_text_center(W / 2.0f, py + 440,
+    draw_text_center(W / 2.0f, py + 488,
                      "UP/DOWN select  LEFT/RIGHT change  ENTER start  Q quit",
                      0x71717a, 1, 1);
     snprintf(buf, sizeof buf, "up to 4 tanks, 5 AI personalities");

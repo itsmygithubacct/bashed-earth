@@ -1,6 +1,24 @@
-/* Generated from Lat15-Fixed16.psf.gz (Debian console-setup, GPL/public
- * console font data). 8x16 bitmaps for ASCII 32..126, one byte per row,
- * MSB = leftmost pixel. */
+/* 8x16 bitmaps for ASCII 32..126, one byte per row, MSB = leftmost pixel.
+ *
+ * Glyphs extracted from Lat15-Fixed16.psf.gz as shipped in Debian's
+ * console-setup package, whose copyright file states: "All console fonts
+ * are public domain by nature."  The Fixed typeface descends from the
+ * X11 8x16 fixed BDF; out of caution its permissive notice is preserved:
+ *
+ *   Copyright 1987, 1988, 1989 by Sony Corp.
+ *   Copyright 1996 BIZNET Poland, Inc.
+ *   Copyright 2000 by Dmitry Yu. Bolkhovityanov
+ *
+ *   Permission to use, copy, modify, and distribute this software and
+ *   its documentation for any purpose and without fee is hereby granted,
+ *   provided that the above copyright notices appear in all copies and
+ *   that both those copyright notices and this permission notice appear
+ *   in supporting documentation, and that the name of Sony Corp. not be
+ *   used in advertising or publicity pertaining to distribution of the
+ *   software without specific, written prior permission.  Sony Corp.
+ *   makes no representations about the suitability of this software for
+ *   any purpose.  It is provided "as is" without express or implied
+ *   warranty. */
 #ifndef FONT8X16_H
 #define FONT8X16_H
 

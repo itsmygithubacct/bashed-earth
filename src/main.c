@@ -1,6 +1,6 @@
 /* Entry point: terminal setup, 30 fps render loop with 2 logic ticks per
- * frame (the original runs its physics at 60 Hz), and a headless selftest
- * mode that plays full AI-vs-AI matches to validate the game logic. */
+ * frame (physics runs at 60 Hz), and a headless selftest mode that plays
+ * full AI-vs-AI matches to validate the game logic. */
 #include "bashed_earth.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,7 +13,7 @@
 static void on_signal(int sig)
 {
     (void)sig;
-    term_shutdown();
+    term_emergency_restore();
     _exit(1);
 }
 
@@ -36,6 +36,7 @@ static void set_defaults(void)
     memset(&G, 0, sizeof G);
     G.damageMultiplier = 1.0f;
     G.wallBounce = true;
+    G.soundOn = true;
     G.pEnabled[0] = true;
     G.pEnabled[1] = true;
     G.pStrategy[1] = G.pStrategy[2] = G.pStrategy[3] = -1;
@@ -236,6 +237,8 @@ static int run(void)
     G.W = w;
     G.H = h;
     render_init(w, h);
+    sound_init();
+    sound_set_enabled(G.soundOn);
     game_reset_to_start();
 
     const double FRAME_MS = 1000.0 / 30;   /* 30 fps render, 60 Hz logic */
@@ -258,6 +261,7 @@ static int run(void)
         sleep_ms(wait);
     }
 
+    sound_shutdown();
     render_shutdown();
     return 0;
 }

@@ -1,6 +1,5 @@
 /*
  * Bashed Earth — a terminal artillery game for kitty-protocol terminals.
- * C port of the Tank Wars web game (tankwars.domainreviews.org).
  *
  * Rendering: RGBA framebuffer pushed to the terminal via the kitty
  * graphics protocol (zlib-compressed, base64-chunked APC sequences).
@@ -13,7 +12,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-/* ---------- Core constants (identical to the JS Config module) ---------- */
+/* ---------- Core constants ---------- */
 #define GRAVITY        0.25f
 #define TANK_WIDTH     24
 #define TANK_HEIGHT    12
@@ -21,7 +20,7 @@
 #define MAX_HP         100
 #define WIND_MAX       10
 #define STARTING_MONEY 10000
-#define TICK_MS        16.666f   /* logic tick = one 60 Hz frame of the original */
+#define TICK_MS        16.666f   /* one 60 Hz logic tick */
 
 #define MAX_PLAYERS       4
 #define MAX_PROJECTILES   64
@@ -188,6 +187,8 @@ typedef struct {
     bool optionsOpen;
     int optionsCursor;
 
+    bool soundOn;
+
     bool quit;
     bool headless;                    /* selftest: no rendering */
 } GameState;
@@ -197,7 +198,7 @@ extern GameState G;
 /* store display order (game.c) */
 extern const int STORE_ORDER[];
 extern const int STORE_ITEMS;
-#define START_ROWS 9   /* start-menu rows incl. START button */
+#define START_ROWS 10  /* start-menu rows incl. START button */
 
 /* ---------- game.c ---------- */
 void game_reset_to_start(void);
@@ -223,9 +224,22 @@ void render_frame(void);              /* draws scene + UI into framebuffer */
 uint8_t *render_fb(void);             /* RGBA buffer, W*H*4 */
 void render_shutdown(void);
 
+/* ---------- sound.c ---------- */
+enum {
+    SFX_FIRE, SFX_EXPL_SMALL, SFX_EXPL_BIG, SFX_DIRT, SFX_BOUNCE,
+    SFX_SPLASH, SFX_MIRV, SFX_DRILL, SFX_SHIELD, SFX_DEATH, SFX_WIN,
+    SFX_MENU_MOVE, SFX_MENU_SELECT, SFX_BUY, SFX_DENY, SFX_COUNT
+};
+bool sound_init(void);                /* spawn audio sink + mixer thread */
+void sound_shutdown(void);
+void sound_play(int id, float vol, float pitch);  /* vol 0..1, pitch ~1 */
+void sound_set_enabled(bool on);
+bool sound_is_enabled(void);
+
 /* ---------- term.c ---------- */
 bool term_init(int *outW, int *outH); /* raw mode + alt screen; pixel size */
 void term_shutdown(void);
+void term_emergency_restore(void);    /* signal-handler-safe cleanup */
 void term_present(const uint8_t *rgba, int w, int h);
 int  term_poll_key(void);             /* -1 if none; else KEY_* or ascii */
 enum { KEY_UP = 1000, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_ESC, KEY_ENTER,

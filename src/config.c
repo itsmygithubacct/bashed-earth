@@ -1,4 +1,4 @@
-/* Data tables ported 1:1 from the JS Config module. */
+/* Weapon, AI, and color data tables. */
 #include "bashed_earth.h"
 
 const Weapon WEAPONS[WEAPON_COUNT] = {
