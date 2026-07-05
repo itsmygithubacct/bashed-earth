@@ -1,0 +1,5 @@
+*.o
+bashed-earth
+*.ppm
+*.png
+gmon.out
