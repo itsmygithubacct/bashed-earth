@@ -1,42 +1,21 @@
-/* Procedural sound. Every effect is synthesized at startup (no asset
- * files) into an s16 PCM buffer; a mixer thread resamples/mixes active
- * voices and streams raw s16le mono 44.1 kHz down a pipe to the first
- * CLI audio sink that stays alive (pacat / pw-play / aplay / sox play).
- * No sink, or the sink dying mid-game, just means the game runs silent —
- * sound_play() is always safe to call, including from the headless
- * selftest where sound_init() never runs. */
+/* Procedural sound. Every effect is synthesized at startup (no asset files)
+ * into an s16 PCM buffer, then handed to the shared pcm-mixer voice engine.
+ * No sink, or a sink dying mid-game, simply means silent play; sound_play()
+ * also remains safe in headless selftests where sound_init() never runs. */
 #include "bashed_earth.h"
-#include <stdio.h>
+#include "pcm_mixer.h"
+
 #include <stdlib.h>
-#include <string.h>
 #include <math.h>
-#include <errno.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <signal.h>
-#include <pthread.h>
-#include <sys/wait.h>
 
 #define SR 44100
-#define MAX_VOICES 16
-#define MIX_FRAMES 512          /* ~11.6 ms per mixer iteration */
 
 typedef struct { int16_t *data; int len; } Sfx;
-typedef struct {
-    const int16_t *data;
-    int len;
-    float pos, step, vol;
-    bool active;
-} Voice;
 
 static Sfx sfx[SFX_COUNT];
-static Voice voices[MAX_VOICES];
-static pthread_mutex_t voiceLock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_t mixer;
-static volatile bool running = false;
+static pcmmix mixer;
+static bool mixer_started;
 static bool enabled = true;
-static int sinkFd = -1;
-static pid_t sinkPid = -1;
 
 /* private rng so sound never perturbs the game's frandf()/rand() streams */
 static uint32_t srng = 0x51ed2701u;
@@ -266,176 +245,46 @@ static void synth_all(void)
     gen_deny();
 }
 
-/* ---------- mixer thread ---------- */
-static void *mixer_main(void *arg)
-{
-    (void)arg;
-    int16_t out[MIX_FRAMES];
-    int32_t acc[MIX_FRAMES];
-
-    while (running) {
-        memset(acc, 0, sizeof acc);
-        pthread_mutex_lock(&voiceLock);
-        for (int v = 0; v < MAX_VOICES; v++) {
-            Voice *vo = &voices[v];
-            if (!vo->active) continue;
-            for (int i = 0; i < MIX_FRAMES; i++) {
-                int ip = (int)vo->pos;
-                if (ip >= vo->len - 1) { vo->active = false; break; }
-                float fr = vo->pos - ip;
-                float smp = vo->data[ip] * (1 - fr) + vo->data[ip + 1] * fr;
-                acc[i] += (int32_t)(smp * vo->vol);
-                vo->pos += vo->step;
-            }
-        }
-        pthread_mutex_unlock(&voiceLock);
-        for (int i = 0; i < MIX_FRAMES; i++)
-            out[i] = (int16_t)(acc[i] > 32767 ? 32767
-                             : acc[i] < -32768 ? -32768 : acc[i]);
-
-        /* blocking write against a small pipe paces us to the DAC clock;
-         * we keep streaming silence between effects so latency is fixed */
-        const char *p = (const char *)out;
-        size_t left = sizeof out;
-        while (left > 0 && running) {
-            ssize_t n = write(sinkFd, p, left);
-            if (n < 0 && errno == EINTR) continue;
-            if (n <= 0) { running = false; break; }   /* sink died: go mute */
-            p += n;
-            left -= (size_t)n;
-        }
-    }
-    return NULL;
-}
-
-/* ---------- sink discovery ---------- */
-static bool in_path(const char *name)
-{
-    const char *path = getenv("PATH");
-    if (!path) return false;
-    char buf[512];
-    while (*path) {
-        const char *sep = strchr(path, ':');
-        size_t n = sep ? (size_t)(sep - path) : strlen(path);
-        if (n > 0 && n < sizeof buf - strlen(name) - 2) {
-            memcpy(buf, path, n);
-            snprintf(buf + n, sizeof buf - n, "/%s", name);
-            if (access(buf, X_OK) == 0) return true;
-        }
-        if (!sep) break;
-        path = sep + 1;
-    }
-    return false;
-}
-
-static const char *const SINKS[][14] = {
-    { "pacat", "--rate=44100", "--channels=1", "--format=s16le",
-      "--latency-msec=60", NULL },
-    { "pw-play", "--raw", "--rate=44100", "--channels=1", "--format=s16", "-", NULL },
-    { "aplay", "-q", "-t", "raw", "-f", "S16_LE", "-r", "44100", "-c", "1", "-", NULL },
-    { "play", "-q", "-t", "raw", "-r", "44100", "-e", "signed", "-b", "16",
-      "-c", "1", "-", NULL },
-};
-#define NUM_SINKS (int)(sizeof SINKS / sizeof SINKS[0])
-
-/* spawn candidate sink reading PCM from a pipe; NULL-fd stdout/stderr */
-static bool spawn_sink(int idx)
-{
-    if (!in_path(SINKS[idx][0])) return false;
-
-    int pfd[2];
-    if (pipe(pfd) != 0) return false;
-
-    pid_t pid = fork();
-    if (pid < 0) { close(pfd[0]); close(pfd[1]); return false; }
-    if (pid == 0) {
-        dup2(pfd[0], STDIN_FILENO);
-        close(pfd[0]);
-        close(pfd[1]);
-        int nul = open("/dev/null", O_RDWR);
-        if (nul >= 0) { dup2(nul, STDOUT_FILENO); dup2(nul, STDERR_FILENO); }
-        execvp(SINKS[idx][0], (char *const *)SINKS[idx]);
-        _exit(127);
-    }
-    close(pfd[0]);
-
-#ifdef F_SETPIPE_SZ
-    /* small pipe = the mixer can't run far ahead of the DAC (latency) */
-    fcntl(pfd[1], F_SETPIPE_SZ, 8192);
-#endif
-
-    /* give it a moment; a sink with no server to talk to exits immediately */
-    usleep(80 * 1000);
-    int st;
-    if (waitpid(pid, &st, WNOHANG) == pid) { close(pfd[1]); return false; }
-
-    sinkFd = pfd[1];
-    sinkPid = pid;
-    return true;
-}
-
 /* ---------- public API ---------- */
 bool sound_init(void)
 {
-    if (running) return true;
-    signal(SIGPIPE, SIG_IGN);   /* sink death must not kill the game */
+    pcmmix_options options;
 
-    int i;
-    for (i = 0; i < NUM_SINKS; i++)
-        if (spawn_sink(i)) break;
-    if (i == NUM_SINKS) return false;
-
+    if (mixer_started) return true;
     synth_all();
-    memset(voices, 0, sizeof voices);
-    running = true;
-    if (pthread_create(&mixer, NULL, mixer_main, NULL) != 0) {
-        running = false;
-        close(sinkFd);
-        sinkFd = -1;
-        return false;
-    }
+    pcmmix_options_init(&options);
+    options.max_voices = 16;
+    options.latency_ms = 60;
+    if (!pcmmix_start(&mixer, &options)) return false;
+    mixer_started = true;
+    pcmmix_set_enabled(&mixer, enabled);
     return true;
 }
 
 void sound_shutdown(void)
 {
-    if (sinkFd < 0) return;
-    if (running) {
-        running = false;
-        pthread_join(mixer, NULL);
-    }
-    close(sinkFd);
-    sinkFd = -1;
-    if (sinkPid > 0) {
-        kill(sinkPid, SIGTERM);
-        waitpid(sinkPid, NULL, 0);
-        sinkPid = -1;
-    }
+    if (mixer_started) pcmmix_stop(&mixer);
+    mixer_started = false;
     for (int i = 0; i < SFX_COUNT; i++) {
         free(sfx[i].data);
         sfx[i].data = NULL;
     }
 }
 
-void sound_set_enabled(bool on) { enabled = on; }
+void sound_set_enabled(bool on)
+{
+    enabled = on;
+    if (mixer_started) pcmmix_set_enabled(&mixer, on);
+}
 bool sound_is_enabled(void) { return enabled; }
 
 void sound_play(int id, float vol, float pitch)
 {
-    if (!running || !enabled || id < 0 || id >= SFX_COUNT || !sfx[id].data)
+    if (!mixer_started || !enabled || id < 0 || id >= SFX_COUNT ||
+        !sfx[id].data)
         return;
     if (pitch <= 0.05f) pitch = 1;
     pitch *= 0.97f + srandf() * 0.06f;   /* tiny jitter so repeats vary */
-
-    pthread_mutex_lock(&voiceLock);
-    int slot = -1;
-    float most = -1;
-    for (int i = 0; i < MAX_VOICES; i++) {
-        if (!voices[i].active) { slot = i; break; }
-        float done = voices[i].pos / voices[i].len;
-        if (done > most) { most = done; slot = i; }   /* steal oldest */
-    }
-    voices[slot] = (Voice){ sfx[id].data, sfx[id].len, 0, pitch,
-                            clampf(vol, 0, 1), true };
-    pthread_mutex_unlock(&voiceLock);
+    pcmmix_sample clip = {sfx[id].data, (size_t)sfx[id].len};
+    (void)pcmmix_play(&mixer, &clip, clampf(vol, 0, 1), pitch);
 }

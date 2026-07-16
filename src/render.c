@@ -1,14 +1,15 @@
-/* Software renderer: draws the scene + UI into an RGBA framebuffer that
- * term.c ships to the terminal. */
+/* Game-specific renderer built on the shared software rasterizer. */
 #include "bashed_earth.h"
 #include "font8x16.h"
+#include "soft_raster.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
 
-static uint8_t *fb = NULL;      /* RGBA */
-static uint8_t *sky = NULL;     /* cached background */
+static sr_canvas canvas;
+static uint8_t *fb = NULL;      /* repacked R,G,B,A presenter buffer */
+static uint32_t *sky = NULL;    /* cached 0xAARRGGBB background */
 static int W = 0, H = 0;
 static int OX = 0, OY = 0;      /* camera shake offset for scene drawing */
 
@@ -17,8 +18,9 @@ uint8_t *render_fb(void) { return fb; }
 void render_init(int w, int h)
 {
     W = w; H = h;
+    (void)sr_canvas_init(&canvas, W, H);
     fb = malloc((size_t)W * H * 4);
-    sky = malloc((size_t)W * H * 4);
+    sky = malloc((size_t)W * H * sizeof *sky);
 
     /* sky gradient: #0a0a0c -> #12121a -> #1a1a24, plus deterministic stars */
     for (int y = 0; y < H; y++) {
@@ -35,9 +37,10 @@ void render_init(int w, int h)
             g = (uint8_t)(0x12 + (0x1a - 0x12) * u);
             b = (uint8_t)(0x1a + (0x24 - 0x1a) * u);
         }
-        uint8_t *row = sky + (size_t)y * W * 4;
+        uint32_t *row = sky + (size_t)y * W;
         for (int x = 0; x < W; x++) {
-            row[x * 4] = r; row[x * 4 + 1] = g; row[x * 4 + 2] = b; row[x * 4 + 3] = 255;
+            row[x] = 0xff000000u | (uint32_t)r << 16 |
+                     (uint32_t)g << 8 | (uint32_t)b;
         }
     }
     for (int i = 0; i < 100; i++) {
@@ -51,80 +54,35 @@ void render_init(int w, int h)
         uint8_t v = (uint8_t)(255 * a);
         for (int dy = 0; dy < size && y + dy < H; dy++)
             for (int dx = 0; dx < size && x + dx < W; dx++) {
-                uint8_t *p = sky + ((size_t)(y + dy) * W + x + dx) * 4;
-                if (v > p[0]) { p[0] = p[1] = p[2] = v; }
+                uint32_t *p = sky + (size_t)(y + dy) * W + x + dx;
+                if (v > ((*p >> 16) & 255u))
+                    *p = 0xff000000u | (uint32_t)v << 16 |
+                         (uint32_t)v << 8 | (uint32_t)v;
             }
     }
 }
 
 void render_shutdown(void)
 {
+    sr_canvas_free(&canvas);
     free(fb); free(sky);
-    fb = sky = NULL;
+    fb = NULL;
+    sky = NULL;
 }
 
 /* ---------- primitives ---------- */
 static inline void px_blend(int x, int y, uint32_t rgb, float a)
 {
-    x += OX; y += OY;
-    if (x < 0 || x >= W || y < 0 || y >= H) return;
-    int ai = (int)(a * 256.0f + 0.5f);
-    if (ai <= 0) return;
-    if (ai > 256) ai = 256;
-    uint8_t *p = fb + ((size_t)y * W + x) * 4;
-    int r = (rgb >> 16) & 255, g = (rgb >> 8) & 255, b = rgb & 255;
-    p[0] = (uint8_t)(p[0] + (((r - p[0]) * ai) >> 8));
-    p[1] = (uint8_t)(p[1] + (((g - p[1]) * ai) >> 8));
-    p[2] = (uint8_t)(p[2] + (((b - p[2]) * ai) >> 8));
+    sr_blend(&canvas, x + OX, y + OY, rgb, a);
 }
 
 /* rect with antialiased fractional edges: per-axis pixel coverage */
-static void fill_rect(float fx, float fy, float fw, float fh, uint32_t rgb, float a)
-{
-    if (fw <= 0 || fh <= 0) return;
-    int x0 = (int)floorf(fx), x1 = (int)ceilf(fx + fw);
-    int y0 = (int)floorf(fy), y1 = (int)ceilf(fy + fh);
-    for (int y = y0; y < y1; y++) {
-        float cy = fminf((float)(y + 1), fy + fh) - fmaxf((float)y, fy);
-        if (cy <= 0) continue;
-        if (cy > 1) cy = 1;
-        for (int x = x0; x < x1; x++) {
-            float cx = fminf((float)(x + 1), fx + fw) - fmaxf((float)x, fx);
-            if (cx <= 0) continue;
-            if (cx > 1) cx = 1;
-            px_blend(x, y, rgb, a * cx * cy);
-        }
-    }
-}
+static void fill_rect(float x, float y, float w, float h, uint32_t rgb, float a)
+{ sr_fill_rect(&canvas, x + OX, y + OY, w, h, rgb, a); }
 
-/* antialiased disc: coverage ramps over the 1px rim. Row spans keep it
- * cheap — the interior blends with no per-pixel sqrt, only rim pixels
- * compute distance. */
 static void fill_circle(float cx, float cy, float r, uint32_t rgb, float a)
-{
-    if (r <= 0) return;
-    float rOut = r + 0.5f, rIn = r - 0.5f;
-    float rOut2 = rOut * rOut, rIn2 = rIn > 0 ? rIn * rIn : 0;
-    int y0 = (int)floorf(cy - rOut), y1 = (int)ceilf(cy + rOut);
-    for (int y = y0; y <= y1; y++) {
-        float dy = y + 0.5f - cy;
-        float w2 = rOut2 - dy * dy;
-        if (w2 <= 0) continue;
-        float half = sqrtf(w2);
-        int x0 = (int)floorf(cx - half), x1 = (int)ceilf(cx + half);
-        for (int x = x0; x <= x1; x++) {
-            float dx = x + 0.5f - cx;
-            float d2 = dx * dx + dy * dy;
-            if (d2 >= rOut2) continue;
-            if (d2 <= rIn2) { px_blend(x, y, rgb, a); continue; }
-            float cov = rOut - sqrtf(d2);
-            px_blend(x, y, rgb, a * (cov > 1 ? 1 : cov));
-        }
-    }
-}
+{ sr_fill_circle(&canvas, cx + OX, cy + OY, r, rgb, a); }
 
-/* soft radial glow: alpha fades linearly to 0 at r (row spans skip the
- * empty bounding-box corners) */
 static void glow_circle(float cx, float cy, float r, uint32_t rgb, float a)
 {
     if (r <= 0) return;
@@ -174,30 +132,8 @@ static void ring(float cx, float cy, float r, float width, uint32_t rgb,
 static void draw_line(float x0, float y0, float x1, float y1, float width,
                       uint32_t rgb, float a, int dashOn, int dashOff)
 {
-    float dx = x1 - x0, dy = y1 - y0;
-    float len2 = dx * dx + dy * dy;
-    float hw = width / 2;
-    if (hw < 0.5f) hw = 0.5f;
-    if (len2 < 0.25f) { fill_circle(x0, y0, hw, rgb, a); return; }
-    float len = sqrtf(len2);
-    int bx0 = (int)floorf(fminf(x0, x1) - hw) - 1;
-    int bx1 = (int)ceilf(fmaxf(x0, x1) + hw) + 1;
-    int by0 = (int)floorf(fminf(y0, y1) - hw) - 1;
-    int by1 = (int)ceilf(fmaxf(y0, y1) + hw) + 1;
-    int period = dashOn + dashOff;
-    for (int y = by0; y < by1; y++)
-        for (int x = bx0; x < bx1; x++) {
-            float px = x + 0.5f - x0, py = y + 0.5f - y0;
-            float t = (px * dx + py * dy) / len2;
-            float tc = clampf(t, 0, 1);
-            float qx = px - tc * dx, qy = py - tc * dy;
-            float cov = hw + 0.5f - sqrtf(qx * qx + qy * qy);
-            if (cov <= 0) continue;
-            if (cov > 1) cov = 1;
-            if (period > 0 && fmodf(tc * len, (float)period) >= dashOn)
-                continue;
-            px_blend(x, y, rgb, a * cov);
-        }
+    sr_line(&canvas, x0 + OX, y0 + OY, x1 + OX, y1 + OY, width,
+            rgb, a, dashOn, dashOff);
 }
 
 static int text_width(const char *s, int scale) { return (int)strlen(s) * FONT_W * scale; }
@@ -302,17 +238,14 @@ static void draw_terrain(void)
         int sy = y + OY;
         if (sy < 0 || sy >= H) continue;
         const uint8_t *src = grid + (size_t)y * W;
-        uint8_t *dst = fb + (size_t)sy * W * 4;
+        uint32_t *dst = canvas.px + (size_t)sy * W;
         for (int x = 0; x < W; x++) {
             uint8_t c = src[x];
             if (!c) continue;
             int sx = x + OX;
             if (sx < 0 || sx >= W) continue;
             uint32_t rgb = MATERIAL_COLORS[c];
-            uint8_t *p = dst + (size_t)sx * 4;
-            p[0] = (rgb >> 16) & 255;
-            p[1] = (rgb >> 8) & 255;
-            p[2] = rgb & 255;
+            dst[sx] = 0xff000000u | rgb;
         }
     }
 }
@@ -393,7 +326,7 @@ static void draw_scene(void)
     OX = (int)((frandf() - 0.5f) * totalShake);
     OY = (int)((frandf() - 0.5f) * totalShake);
 
-    memcpy(fb, sky, (size_t)W * H * 4);
+    memcpy(canvas.px, sky, (size_t)W * H * sizeof *sky);
     draw_terrain();
 
     for (int i = 0; i < G.numPlayers; i++)
@@ -468,12 +401,17 @@ static void draw_scene(void)
         if (ai > 256) ai = 256;
         if (ai > 0) {
             const int fr = 0xff, fg = 0xc8, fb_ = 0x96;
-            uint8_t *p = fb;
             size_t n = (size_t)W * H;
-            for (size_t i = 0; i < n; i++, p += 4) {
-                p[0] = (uint8_t)(p[0] + (((fr - p[0]) * ai) >> 8));
-                p[1] = (uint8_t)(p[1] + (((fg - p[1]) * ai) >> 8));
-                p[2] = (uint8_t)(p[2] + (((fb_ - p[2]) * ai) >> 8));
+            for (size_t i = 0; i < n; i++) {
+                uint32_t p = canvas.px[i];
+                int r = (p >> 16) & 255;
+                int g = (p >> 8) & 255;
+                int b = p & 255;
+                r += ((fr - r) * ai) >> 8;
+                g += ((fg - g) * ai) >> 8;
+                b += ((fb_ - b) * ai) >> 8;
+                canvas.px[i] = 0xff000000u | (uint32_t)r << 16 |
+                               (uint32_t)g << 8 | (uint32_t)b;
             }
         }
     }
@@ -640,9 +578,20 @@ static void draw_gameover(void)
                      "ENTER next match   Q quit", 0x71717a, 1, 1);
 }
 
+static void repack_frame(void)
+{
+    for (size_t i = 0, count = (size_t)W * H; i < count; i++) {
+        uint32_t pixel = canvas.px[i];
+        fb[i * 4 + 0] = (uint8_t)(pixel >> 16);
+        fb[i * 4 + 1] = (uint8_t)(pixel >> 8);
+        fb[i * 4 + 2] = (uint8_t)pixel;
+        fb[i * 4 + 3] = (uint8_t)(pixel >> 24);
+    }
+}
+
 void render_frame(void)
 {
-    if (!fb) return;
+    if (!canvas.px || !fb) return;
     draw_scene();
     switch (G.gameState) {
     case GS_START: draw_start_menu(); break;
@@ -650,4 +599,5 @@ void render_frame(void)
     case GS_GAMEOVER: draw_hud(); draw_gameover(); break;
     default: draw_hud(); break;
     }
+    repack_frame();
 }

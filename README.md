@@ -80,13 +80,16 @@ carry-over) and checks invariants — no terminal needed, so it runs in CI.
 
 | File | Role |
 |------|------|
-| `src/term.c` | raw mode, key decoding, kitty graphics frames (double-buffered ids, sync updates, threaded zlib + base64 encoder) |
+| `src/term.c` | key decoding around the vendored `kitty-framebuffer` session |
 | `src/terrain.c` | falling-sand automaton with per-row active-span tracking |
 | `src/game.c` | tanks, projectiles, flames, explosions, AI, store, turn flow |
-| `src/render.c` | software rasteriser: antialiased primitives, scene, HUD, menus (embedded PSF font, Scale2x/3x text) |
-| `src/sound.c` | procedural SFX synth + mixer thread piped to a CLI audio sink |
+| `src/render.c` | scene, HUD, menus, and Scale2x/3x text over vendored `soft-raster` primitives |
+| `src/sound.c` | procedural SFX synthesis routed through vendored `pcm-mixer` |
 | `src/config.c` | weapon/AI/color data tables |
 | `src/main.c` | 30 fps loop (60 Hz logic), selftest, render-test |
+
+The three shared runtime libraries are vendored under `third_party/`, so a
+normal checkout remains self-contained.
 
 ## License
 
