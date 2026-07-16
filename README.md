@@ -31,9 +31,10 @@ kitty-protocol terminal: kitty, ghostty, wezterm...). **Linux only.**
   that buries ice worlds
 - **Hazards** — fall damage (parachutes save you), buried-alive damage,
   self-hits, and a stalemate rule so dug-in wars end
-- **Procedural sound** — every effect (shots, explosions, splashes,
-  bounces, UI ticks, the victory jingle) is synthesized at startup and
-  mixed live, streamed to whatever audio sink your system has
+- **Locally generated sound bank** — 14 reviewed shot, explosion, impact,
+  splash, ricochet, UI, and victory WAVs load at startup; the drill and any
+  missing or invalid asset use the built-in synthesized fallback. Everything
+  is mixed live and streamed to whatever audio sink your system has
   (`pacat` / `pw-play` / `aplay` / sox `play`); silently disabled if none
 
 ## Build
@@ -84,7 +85,7 @@ carry-over) and checks invariants — no terminal needed, so it runs in CI.
 | `src/terrain.c` | falling-sand automaton with per-row active-span tracking |
 | `src/game.c` | tanks, projectiles, flames, explosions, AI, store, turn flow |
 | `src/render.c` | scene, HUD, menus, and Scale2x/3x text over vendored `soft-raster` primitives |
-| `src/sound.c` | procedural SFX synthesis routed through vendored `pcm-mixer` |
+| `src/sound.c` | reviewed WAV bank + procedural fallback routed through vendored `pcm-mixer` |
 | `src/config.c` | weapon/AI/color data tables |
 | `src/main.c` | 30 fps loop (60 Hz logic), selftest, render-test |
 
@@ -93,6 +94,7 @@ normal checkout remains self-contained.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). The embedded terminal font comes from
+Code is MIT; the shipped SFX bank is CC0-derived. See [LICENSE](LICENSE) and
+[the per-file audio provenance](docs/audio-provenance.json). The embedded terminal font comes from
 Debian console-setup's public-domain console fonts (details in
 `src/font8x16.h`).

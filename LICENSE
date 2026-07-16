@@ -26,3 +26,10 @@ The embedded terminal font (src/font8x16.h) is extracted from Debian
 console-setup's Lat15-Fixed16 console font, which Debian declares public
 domain ("All console fonts are public domain by nature"). Its X11-lineage
 permissive notice is preserved in that file's header.
+
+The files under assets/sfx/ are locally rendered audio. The Foley-derived
+files use only CC0 1.0 source recordings; the remaining files are original
+procedural synthesis dedicated to the public domain under CC0 1.0. Detailed
+per-file hashes, generator settings, and recording lineage are recorded in
+docs/audio-provenance.json. CC0 1.0:
+https://creativecommons.org/publicdomain/zero/1.0/

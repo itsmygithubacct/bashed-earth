@@ -1,12 +1,16 @@
-/* Procedural sound. Every effect is synthesized at startup (no asset files)
- * into an s16 PCM buffer, then handed to the shared pcm-mixer voice engine.
- * No sink, or a sink dying mid-game, simply means silent play; sound_play()
- * also remains safe in headless selftests where sound_init() never runs. */
+/* Banked PCM audio with a procedural fallback. Every effect is synthesized at
+ * startup, then replaced by its reviewed WAV when that file is present. No
+ * sink, missing/invalid assets, or a sink dying mid-game remain safe: the game
+ * either uses the fallback or plays silently. */
 #include "bashed_earth.h"
 #include "pcm_mixer.h"
 
-#include <stdlib.h>
+#include <limits.h>
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
 #define SR 44100
 
@@ -245,6 +249,81 @@ static void synth_all(void)
     gen_deny();
 }
 
+static const char *const sfx_files[SFX_COUNT] = {
+    [SFX_FIRE] = "sfx/fire.wav",
+    [SFX_EXPL_SMALL] = "sfx/expl_small.wav",
+    [SFX_EXPL_BIG] = "sfx/expl_big.wav",
+    [SFX_DIRT] = "sfx/dirt.wav",
+    [SFX_BOUNCE] = "sfx/bounce.wav",
+    [SFX_SPLASH] = "sfx/splash.wav",
+    [SFX_MIRV] = "sfx/mirv.wav",
+    /* Drill deliberately retains the startup synth: no promoted render had
+     * the sustained rotating-tool gesture this cue needs. */
+    [SFX_SHIELD] = "sfx/shield.wav",
+    [SFX_DEATH] = "sfx/death.wav",
+    [SFX_WIN] = "sfx/win.wav",
+    [SFX_MENU_MOVE] = "sfx/menu_move.wav",
+    [SFX_MENU_SELECT] = "sfx/menu_select.wav",
+    [SFX_BUY] = "sfx/buy.wav",
+    [SFX_DENY] = "sfx/deny.wav",
+};
+
+static char sound_asset_root[512] = "assets";
+
+static void sound_asset_paths_init(void)
+{
+    const char *override = getenv("BASHED_EARTH_ASSETS");
+    char executable[400];
+    char candidate[512];
+    char *slash;
+    ssize_t length;
+
+    if (override && *override) {
+        snprintf(sound_asset_root, sizeof sound_asset_root, "%s", override);
+        return;
+    }
+    length = readlink("/proc/self/exe", executable, sizeof executable - 1);
+    if (length <= 0) return;
+    executable[length] = '\0';
+    slash = strrchr(executable, '/');
+    if (!slash) return;
+    *slash = '\0';
+    snprintf(candidate, sizeof candidate, "%s/assets", executable);
+    if (access(candidate, F_OK) == 0) {
+        snprintf(sound_asset_root, sizeof sound_asset_root, "%s", candidate);
+        return;
+    }
+    snprintf(candidate, sizeof candidate,
+             "%s/../share/bashed-earth/assets", executable);
+    if (access(candidate, F_OK) == 0)
+        snprintf(sound_asset_root, sizeof sound_asset_root, "%s", candidate);
+}
+
+static void load_external_sounds(void)
+{
+    sound_asset_paths_init();
+    for (int id = 0; id < SFX_COUNT; id++) {
+        char full[768];
+        char err[128];
+        size_t frames = 0;
+        int16_t *data;
+
+        if (!sfx_files[id]) continue;
+        if (snprintf(full, sizeof full, "%s/%s", sound_asset_root,
+                     sfx_files[id]) >= (int)sizeof full)
+            continue;
+        data = pcmmix_wav_load(full, &frames, err, sizeof err);
+        if (!data) continue;
+        if (frames == 0 || frames > (size_t)INT_MAX) {
+            pcmmix_wav_free(data);
+            continue;
+        }
+        free(sfx[id].data);
+        sfx[id].data = data;
+        sfx[id].len = (int)frames;
+    }
+}
+
 /* ---------- public API ---------- */
 bool sound_init(void)
 {
@@ -252,6 +331,7 @@ bool sound_init(void)
 
     if (mixer_started) return true;
     synth_all();
+    load_external_sounds();
     pcmmix_options_init(&options);
     options.max_voices = 16;
     options.latency_ms = 60;
@@ -268,6 +348,7 @@ void sound_shutdown(void)
     for (int i = 0; i < SFX_COUNT; i++) {
         free(sfx[i].data);
         sfx[i].data = NULL;
+        sfx[i].len = 0;
     }
 }
 
