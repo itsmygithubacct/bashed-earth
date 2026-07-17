@@ -257,8 +257,7 @@ static const char *const sfx_files[SFX_COUNT] = {
     [SFX_BOUNCE] = "sfx/bounce.wav",
     [SFX_SPLASH] = "sfx/splash.wav",
     [SFX_MIRV] = "sfx/mirv.wav",
-    /* Drill deliberately retains the startup synth: no promoted render had
-     * the sustained rotating-tool gesture this cue needs. */
+    [SFX_DRILL] = "sfx/drill.wav",
     [SFX_SHIELD] = "sfx/shield.wav",
     [SFX_DEATH] = "sfx/death.wav",
     [SFX_WIN] = "sfx/win.wav",

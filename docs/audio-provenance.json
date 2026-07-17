@@ -1,12 +1,13 @@
 {
   "schema": 1,
   "pack": "bashed-earth",
-  "generated_at": "2026-07-16",
+  "generated_at": "2026-07-17",
   "format": "mono 44100 Hz signed 16-bit PCM WAV",
   "license": "CC0-1.0",
   "provider": "local python_sound_assets generators",
-  "fallback": "SFX_DRILL remains procedural in src/sound.c; any absent or invalid WAV also falls back to the startup synth",
+  "fallback": "Every cue retains a procedural startup fallback in src/sound.c; any absent or invalid WAV uses it",
   "source_provenance": "projectile_sounds/sources/provenance.json",
+  "additional_source_provenance": "power_tool_generator/sources/provenance.json",
   "artifacts": [
     {"file":"assets/sfx/fire.wav","generator":"weapons_destruction_generator","cue":"fire","options":{"weapon":"artillery","intensity":0.85},"seed":20260719,"duration_seconds":2.45,"sha256":"40ac21501d4c5faae0ced7b354b41c9641a4724eb04124de2a4c12781fc49dae","sources":[]},
     {"file":"assets/sfx/expl_small.wav","generator":"weapons_destruction_generator","cue":"explosion","options":{"explosive":"grenade","intensity":0.85},"seed":20260724,"duration_seconds":1.05,"sha256":"869beec5a0f8890ac208d3b8f99f71382dd4fa8ce40c04dcc01c4c332c710420","sources":[]},
@@ -15,6 +16,7 @@
     {"file":"assets/sfx/bounce.wav","generator":"weapons_destruction_generator","cue":"ricochet","options":{"projectile":"shell","material":"stone","intensity":0.85},"seed":20260723,"duration_seconds":0.724989,"sha256":"2a9cf2b554073c62bd5550b298c9e540ad6c8aaac1eddbb99f4a1506c5f820e6","sources":[]},
     {"file":"assets/sfx/splash.wav","generator":"projectile_sounds","cue":"impact","options":{"projectile":"shell","material":"water","intensity":0.85},"seed":20260721,"duration_seconds":0.998209,"sha256":"8bd0c93b4f4952721d253504486e12008ff09985f7a4f0ab8804e42de4b47975","sources":["rubberduck_bubble_01.wav","rubberduck_splash_04.wav","rubberduck_splash_10.wav","rubberduck_splash_11.wav","rubberduck_splash_12.wav"]},
     {"file":"assets/sfx/mirv.wav","generator":"weapons_destruction_generator","cue":"launch","options":{"projectile":"missile","intensity":0.85},"seed":20260721,"duration_seconds":1.05,"sha256":"edadfb14fa696506ee79cd9a491698f211a124bcaa4c588ff7dd96ced982e58a","sources":[]},
+    {"file":"assets/sfx/drill.wav","generator":"power_tool_generator","cue":"drill_loaded","options":{"seconds":1.2,"speed":1.0,"brightness":0.35,"intensity":0.75},"seed":20260722,"duration_seconds":1.2,"sha256":"62c0d754dbe8f5ff1d59650fef5ca8934bd18cd9a2f854cf5e83615e262e2229","sources":["drill_concrete_cc0.wav"]},
     {"file":"assets/sfx/shield.wav","generator":"weapons_destruction_generator","cue":"ricochet","options":{"projectile":"shell","material":"metal","intensity":0.85},"seed":20260723,"duration_seconds":0.724989,"sha256":"aa8cfedc11544db7ca048d51e17fe5615fa5288bfc5b7982714d1134e69d9a5c","sources":[]},
     {"file":"assets/sfx/death.wav","generator":"weapons_destruction_generator","cue":"explosion","options":{"explosive":"artillery","intensity":0.85},"seed":20260725,"duration_seconds":2.25,"sha256":"5fbf60469a538e9cf9a55aad1e683b1cd2e4175ac286679e019ecee031edd76b","sources":[]},
     {"file":"assets/sfx/win.wav","generator":"ui_game_state_generator","cue":"win","style":"arcade","seed":20260715,"duration_seconds":1.08,"sha256":"abc38266a9feb0a68072b85bb9d7b9904cf1bca531ad486be947bf97fcfaa115","sources":[]},
