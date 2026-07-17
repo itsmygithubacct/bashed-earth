@@ -31,10 +31,10 @@ kitty-protocol terminal: kitty, ghostty, wezterm...). **Linux only.**
   that buries ice worlds
 - **Hazards** — fall damage (parachutes save you), buried-alive damage,
   self-hits, and a stalemate rule so dug-in wars end
-- **Locally generated sound bank** — 14 reviewed shot, explosion, impact,
-  splash, ricochet, UI, and victory WAVs load at startup; the drill and any
-  missing or invalid asset use the built-in synthesized fallback. Everything
-  is mixed live and streamed to whatever audio sink your system has
+- **Locally generated sound bank** — 15 reviewed shot, explosion, impact,
+  splash, ricochet, drill, UI, and victory WAVs load at startup; any missing
+  or invalid asset uses the built-in synthesized fallback. Everything is
+  mixed live and streamed to whatever audio sink your system has
   (`pacat` / `pw-play` / `aplay` / sox `play`); silently disabled if none
 
 ## Build
@@ -89,7 +89,7 @@ carry-over) and checks invariants — no terminal needed, so it runs in CI.
 | `src/config.c` | weapon/AI/color data tables |
 | `src/main.c` | 30 fps loop (60 Hz logic), selftest, render-test |
 
-The three shared runtime libraries are vendored under `third_party/`, so a
+The four shared runtime libraries are pinned under `third_party/`, so a
 normal checkout remains self-contained.
 
 ## License
@@ -97,4 +97,4 @@ normal checkout remains self-contained.
 Code is MIT; the shipped SFX bank is CC0-derived. See [LICENSE](LICENSE) and
 [the per-file audio provenance](docs/audio-provenance.json). The embedded terminal font comes from
 Debian console-setup's public-domain console fonts (details in
-`src/font8x16.h`).
+`third_party/soft-raster/src/font8x16.h`).

@@ -1,6 +1,5 @@
 /* Game-specific renderer built on the shared software rasterizer. */
 #include "bashed_earth.h"
-#include "font8x16.h"
 #include "soft_raster.h"
 #include <stdlib.h>
 #include <string.h>
@@ -136,11 +135,11 @@ static void draw_line(float x0, float y0, float x1, float y1, float width,
             rgb, a, dashOn, dashOff);
 }
 
-static int text_width(const char *s, int scale) { return (int)strlen(s) * FONT_W * scale; }
+static int text_width(const char *s, int scale) { return (int)strlen(s) * SR_FONT_W * scale; }
 
 static inline int glyph_bit(const unsigned char *glyph, int gx, int gy)
 {
-    if (gx < 0 || gx >= FONT_W || gy < 0 || gy >= FONT_H) return 0;
+    if (gx < 0 || gx >= SR_FONT_W || gy < 0 || gy >= SR_FONT_H) return 0;
     return (glyph[gy] >> (7 - gx)) & 1;
 }
 
@@ -150,8 +149,8 @@ static inline int glyph_bit(const unsigned char *glyph, int gx, int gy)
 static void draw_glyph(int x, int y, const unsigned char *g, uint32_t rgb,
                        float a, int scale)
 {
-    for (int gy = 0; gy < FONT_H; gy++)
-        for (int gx = 0; gx < FONT_W; gx++) {
+    for (int gy = 0; gy < SR_FONT_H; gy++)
+        for (int gx = 0; gx < SR_FONT_W; gx++) {
             int E = glyph_bit(g, gx, gy);
             if (scale != 2 && scale != 3) {    /* plain block scaling */
                 if (E)
@@ -207,8 +206,8 @@ static void draw_text(float fx, float fy, const char *s, uint32_t rgb,
     for (; *s; s++) {
         unsigned char c = (unsigned char)*s;
         if (c < 32 || c > 126) c = '?';
-        draw_glyph(x, y, font8x16[c - 32], rgb, a, scale);
-        x += FONT_W * scale;
+        draw_glyph(x, y, sr_font_glyph(c), rgb, a, scale);
+        x += SR_FONT_W * scale;
     }
 }
 

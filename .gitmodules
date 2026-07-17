@@ -1,0 +1,12 @@
+[submodule "kitty-framebuffer"]
+	path = third_party/kitty-framebuffer
+	url = https://github.com/itsmygithubacct/kitty-framebuffer.git
+[submodule "pcm-mixer"]
+	path = third_party/pcm-mixer
+	url = https://github.com/itsmygithubacct/pcm-mixer.git
+[submodule "soft-raster"]
+	path = third_party/soft-raster
+	url = https://github.com/itsmygithubacct/soft-raster.git
+[submodule "kitty_keyboard"]
+	path = third_party/kitty_keyboard
+	url = https://github.com/itsmygithubacct/kitty-keyboard.git

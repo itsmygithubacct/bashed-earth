@@ -1,8 +1,10 @@
 CC      ?= cc
+KITTY_KEYBOARD_DIR ?= third_party/kitty_keyboard
 KITTY_FRAMEBUFFER_DIR ?= third_party/kitty-framebuffer
 SOFT_RASTER_DIR ?= third_party/soft-raster
 PCM_MIXER_DIR ?= third_party/pcm-mixer
 override CPPFLAGS += -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L \
+	-I$(KITTY_KEYBOARD_DIR)/include \
 	-I$(KITTY_FRAMEBUFFER_DIR)/include \
 	-I$(SOFT_RASTER_DIR)/include \
 	-I$(PCM_MIXER_DIR)/include
@@ -10,8 +12,9 @@ CFLAGS  ?= -O2 -Wall -Wextra -std=c11
 LDLIBS   = -lz -lm -lpthread
 
 SRC = src/main.c src/game.c src/terrain.c src/render.c src/term.c src/config.c src/sound.c
-VENDOR_OBJ = src/vendor_kitty_framebuffer.o src/vendor_pcm_mixer.o \
-	src/vendor_pcm_wav.o src/vendor_soft_raster.o
+VENDOR_OBJ = src/vendor_kitty_keyboard.o src/vendor_kitty_keyboard_posix.o \
+	src/vendor_kitty_framebuffer.o src/vendor_pcm_mixer.o src/vendor_pcm_wav.o \
+	src/vendor_soft_raster.o
 OBJ = $(SRC:.c=.o) $(VENDOR_OBJ)
 BIN = bashed-earth
 
@@ -23,9 +26,20 @@ $(BIN): $(OBJ)
 src/%.o: src/%.c src/bashed_earth.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-src/render.o: src/font8x16.h $(SOFT_RASTER_DIR)/include/soft_raster.h
+src/render.o: $(SOFT_RASTER_DIR)/include/soft_raster.h
 src/sound.o: $(PCM_MIXER_DIR)/include/pcm_mixer.h
-src/term.o: $(KITTY_FRAMEBUFFER_DIR)/include/kitty_framebuffer.h
+src/term.o: $(KITTY_KEYBOARD_DIR)/include/kitty_keyboard.h \
+	$(KITTY_KEYBOARD_DIR)/include/kitty_keyboard_posix.h \
+	$(KITTY_FRAMEBUFFER_DIR)/include/kitty_framebuffer.h
+
+src/vendor_kitty_keyboard.o: $(KITTY_KEYBOARD_DIR)/src/kitty_keyboard.c \
+	$(KITTY_KEYBOARD_DIR)/include/kitty_keyboard.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+src/vendor_kitty_keyboard_posix.o: $(KITTY_KEYBOARD_DIR)/src/kitty_keyboard_posix.c \
+	$(KITTY_KEYBOARD_DIR)/include/kitty_keyboard.h \
+	$(KITTY_KEYBOARD_DIR)/include/kitty_keyboard_posix.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 src/vendor_kitty_framebuffer.o: $(KITTY_FRAMEBUFFER_DIR)/src/kitty_framebuffer.c \
 	$(KITTY_FRAMEBUFFER_DIR)/src/kitty_framebuffer_internal.h \
