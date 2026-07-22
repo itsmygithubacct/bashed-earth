@@ -3,9 +3,8 @@
  * sink, missing/invalid assets, or a sink dying mid-game remain safe: the game
  * either uses the fallback or plays silently. */
 #include "bashed_earth.h"
-#include "pcm_mixer.h"
+#include "pcmmix_bank.h"
 
-#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,9 +13,7 @@
 
 #define SR 44100
 
-typedef struct { int16_t *data; int len; } Sfx;
-
-static Sfx sfx[SFX_COUNT];
+static pcmmix_bank sound_bank;
 static pcmmix mixer;
 static bool mixer_started;
 static bool enabled = true;
@@ -50,8 +47,10 @@ static void bake(int id, const float *s, int n, float peak)
         v = clampf(v, -1, 1);
         out[i] = (int16_t)(v * 32767);
     }
-    sfx[id].data = out;
-    sfx[id].len = n;
+    pcmmix_bank_clear_cue(&sound_bank, (uint32_t)id);
+    if (!pcmmix_bank_take(&sound_bank, (uint32_t)id, 0u, out,
+                          (size_t)n, 1.0f, 1.0f))
+        free(out);
 }
 
 /* shot / explosion family: filtered noise burst + pitch-swept sine body */
@@ -304,22 +303,13 @@ static void load_external_sounds(void)
     for (int id = 0; id < SFX_COUNT; id++) {
         char full[768];
         char err[128];
-        size_t frames = 0;
-        int16_t *data;
-
         if (!sfx_files[id]) continue;
         if (snprintf(full, sizeof full, "%s/%s", sound_asset_root,
                      sfx_files[id]) >= (int)sizeof full)
             continue;
-        data = pcmmix_wav_load(full, &frames, err, sizeof err);
-        if (!data) continue;
-        if (frames == 0 || frames > (size_t)INT_MAX) {
-            pcmmix_wav_free(data);
-            continue;
-        }
-        free(sfx[id].data);
-        sfx[id].data = data;
-        sfx[id].len = (int)frames;
+        (void)pcmmix_bank_load_wav(&sound_bank, (uint32_t)id, 0u,
+                                   full, 1.0f, 1.0f,
+                                   err, sizeof err);
     }
 }
 
@@ -329,6 +319,7 @@ bool sound_init(void)
     pcmmix_options options;
 
     if (mixer_started) return true;
+    (void)pcmmix_bank_init(&sound_bank, SFX_COUNT, 0x51ed2701u);
     synth_all();
     load_external_sounds();
     pcmmix_options_init(&options);
@@ -344,11 +335,7 @@ void sound_shutdown(void)
 {
     if (mixer_started) pcmmix_stop(&mixer);
     mixer_started = false;
-    for (int i = 0; i < SFX_COUNT; i++) {
-        free(sfx[i].data);
-        sfx[i].data = NULL;
-        sfx[i].len = 0;
-    }
+    pcmmix_bank_clear(&sound_bank);
 }
 
 void sound_set_enabled(bool on)
@@ -360,11 +347,9 @@ bool sound_is_enabled(void) { return enabled; }
 
 void sound_play(int id, float vol, float pitch)
 {
-    if (!mixer_started || !enabled || id < 0 || id >= SFX_COUNT ||
-        !sfx[id].data)
-        return;
+    if (!mixer_started || !enabled || id < 0 || id >= SFX_COUNT) return;
     if (pitch <= 0.05f) pitch = 1;
     pitch *= 0.97f + srandf() * 0.06f;   /* tiny jitter so repeats vary */
-    pcmmix_sample clip = {sfx[id].data, (size_t)sfx[id].len};
-    (void)pcmmix_play(&mixer, &clip, clampf(vol, 0, 1), pitch);
+    (void)pcmmix_bank_play(&mixer, &sound_bank, (uint32_t)id,
+                           clampf(vol, 0, 1), pitch);
 }
